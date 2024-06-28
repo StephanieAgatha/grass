@@ -1,10 +1,4 @@
-u8f782821565a05c7-zone-custom-region-rsa-session-fmF8OpYVR-sessTime-20:u8f782821565a05c7@43.152.113.55:2333
-u8f782821565a05c7-zone-custom-region-rsa-session-11XWOTzMc-sessTime-20:u8f782821565a05c7@43.152.113.55:2333
-u8f782821565a05c7-zone-custom-region-rsa-session-iN145yLKA-sessTime-20:u8f782821565a05c7@43.152.113.55:2333
-u8f782821565a05c7-zone-custom-region-rsa-session-0nPaSeGeR-sessTime-20:u8f782821565a05c7@43.152.113.55:2333
-u8f782821565a05c7-zone-custom-region-rsa-session-DKhAXoBEb-sessTime-20:u8f782821565a05c7@43.152.113.55:2333
-u8f782821565a05c7-zone-custom-region-rsa-session-9svV4NYCE-sessTime-20:u8f782821565a05c7@43.152.113.55:2333
-u8f782821565a05c7-zone-custom-region-rsa-session-FZESBGsqF-sessTime-20:u8f782821565a05c7@43.152.113.55:2333
-u8f782821565a05c7-zone-custom-region-rsa-session-V6VKp8yw7-sessTime-20:u8f782821565a05c7@43.152.113.55:2333
-u8f782821565a05c7-zone-custom-region-rsa-session-JOqdCCp5L-sessTime-20:u8f782821565a05c7@43.152.113.55:2333
-u8f782821565a05c7-zone-custom-region-rsa-session-2v3ea5lrV-sessTime-20:u8f782821565a05c7@43.152.113.55:2333
+user:pw@host:port
+user:pw@host:port
+user:pw@host:port
+user:pw@host:port
