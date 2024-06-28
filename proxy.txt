@@ -1,4 +1,4 @@
-proxy1
-proxy2
-proxy3
-dst
+user:pw@host:port
+user:pw@host:port
+user:pw@host:port
+user:pw@host:port
