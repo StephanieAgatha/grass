@@ -73,11 +73,87 @@ func getProxyIP(proxy string) (string, error) {
 	return "", fmt.Errorf("query field not found in response")
 }
 
+func sendPing(c *websocket.Conn, proxyIP string, logger zerolog.Logger) {
+	ticker := time.NewTicker(20 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			sendMessage := map[string]interface{}{
+				"id":      uuid.New().String(),
+				"version": "1.0.0",
+				"action":  "PING",
+				"data":    map[string]interface{}{},
+			}
+			err := c.WriteJSON(sendMessage)
+			if err != nil {
+				logger.Error().Err(err).Msg("Error sending ping")
+				return
+			}
+			logger.Info().Str("ip", proxyIP).Interface("message", sendMessage).Msg("Sent ping message")
+		}
+	}
+}
+
+func receiveMessages(ctx context.Context, c *websocket.Conn, proxyIP, deviceID, userID string, logger zerolog.Logger) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			_, message, err := c.ReadMessage()
+			if err != nil {
+				logger.Error().Err(err).Msg("Error reading message")
+				return
+			}
+
+			var msg map[string]interface{}
+			if err := json.Unmarshal(message, &msg); err != nil {
+				logger.Error().Err(err).Msg("Error unmarshalling message")
+				continue
+			}
+			logger.Info().Str("ip", proxyIP).Interface("message", msg).Msg("Received message")
+
+			switch action := msg["action"].(string); action {
+			case "AUTH":
+				authResponse := map[string]interface{}{
+					"id":            msg["id"].(string),
+					"origin_action": "AUTH",
+					"result": map[string]interface{}{
+						"browser_id":  deviceID,
+						"user_id":     userID,
+						"user_agent":  CustomHeaders.Get("User-Agent"),
+						"timestamp":   time.Now().Unix(),
+						"device_type": "extension",
+						"version":     "2.5.0",
+					},
+				}
+				err := c.WriteJSON(authResponse)
+				if err != nil {
+					logger.Error().Err(err).Msg("Error sending auth response")
+					return
+				}
+				logger.Info().Str("ip", proxyIP).Interface("response", authResponse).Msg("Sent auth response")
+
+			case "PONG":
+				pongResponse := map[string]interface{}{
+					"id":            msg["id"].(string),
+					"origin_action": "PONG",
+				}
+				err := c.WriteJSON(pongResponse)
+				if err != nil {
+					logger.Error().Err(err).Msg("Error sending pong response")
+					return
+				}
+				logger.Info().Str("ip", proxyIP).Interface("response", pongResponse).Msg("Sent pong response")
+			}
+		}
+	}
+}
+
 func connectToWSS(ctx context.Context, socks5Proxy string, userID string, logger zerolog.Logger) error {
-	// set prefix
 	proxyURL := "socks5://" + socks5Proxy
 
-	// parse url proxy
 	proxyParsed, err := url.Parse(proxyURL)
 	if err != nil {
 		return fmt.Errorf("error parsing proxy URL: %v", err)
@@ -86,14 +162,12 @@ func connectToWSS(ctx context.Context, socks5Proxy string, userID string, logger
 	deviceID := uuid.NewSHA1(uuid.NameSpaceDNS, []byte(proxyParsed.Host)).String()
 	logger.Info().Str("deviceID", deviceID).Msg("Device ID")
 
-	// Check ip address of the proxy
 	proxyIP, err := getProxyIP(socks5Proxy)
 	if err != nil {
 		return fmt.Errorf("error getting proxy IP: %v", err)
 	}
 	logger.Info().Str("proxyIP", proxyIP).Msg("Proxy IP")
 
-	// initialize connection to ws
 	u := url.URL{Scheme: "wss", Host: "proxy.wynd.network:4650", Path: "/"}
 	logger.Info().Str("url", u.String()).Msg("Connecting to")
 
@@ -109,80 +183,10 @@ func connectToWSS(ctx context.Context, socks5Proxy string, userID string, logger
 	}
 	defer c.Close()
 
-	// goroutine for sending a message every 20 second
-	go func() {
-		ticker := time.NewTicker(20 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				sendMessage := map[string]interface{}{
-					"id":      uuid.New().String(),
-					"version": "1.0.0",
-					"action":  "PING",
-					"data":    map[string]interface{}{},
-				}
-				err := c.WriteJSON(sendMessage)
-				if err != nil {
-					logger.Error().Err(err).Msg("Error sending ping")
-					return
-				}
-				logger.Info().Str("ip", proxyIP).Interface("message", sendMessage).Msg("Sent ping message")
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
+	go sendPing(c, proxyIP, logger)
+	receiveMessages(ctx, c, proxyIP, deviceID, userID, logger)
 
-	// loop for every receive messages
-	for {
-		_, message, err := c.ReadMessage()
-		if err != nil {
-			logger.Error().Err(err).Msg("Error reading message")
-			return fmt.Errorf("error reading message: %v", err)
-		}
-
-		var msg map[string]interface{}
-		if err := json.Unmarshal(message, &msg); err != nil {
-			logger.Error().Err(err).Msg("Error unmarshalling message")
-			continue
-		}
-		logger.Info().Str("ip", proxyIP).Interface("message", msg).Msg("Received message")
-
-		switch action := msg["action"].(string); action {
-		case "AUTH":
-			authResponse := map[string]interface{}{
-				"id":            msg["id"].(string),
-				"origin_action": "AUTH",
-				"result": map[string]interface{}{
-					"browser_id":  deviceID,
-					"user_id":     userID,
-					"user_agent":  CustomHeaders.Get("User-Agent"),
-					"timestamp":   time.Now().Unix(),
-					"device_type": "extension",
-					"version":     "2.5.0",
-				},
-			}
-			err := c.WriteJSON(authResponse)
-			if err != nil {
-				logger.Error().Err(err).Msg("Error sending auth response")
-				return fmt.Errorf("error sending auth response: %v", err)
-			}
-			logger.Info().Str("ip", proxyIP).Interface("response", authResponse).Msg("Sent auth response")
-
-		case "PONG":
-			pongResponse := map[string]interface{}{
-				"id":            msg["id"].(string),
-				"origin_action": "PONG",
-			}
-			err := c.WriteJSON(pongResponse)
-			if err != nil {
-				logger.Error().Err(err).Msg("Error sending pong response")
-				return fmt.Errorf("error sending pong response: %v", err)
-			}
-			logger.Info().Str("ip", proxyIP).Interface("response", pongResponse).Msg("Sent pong response")
-		}
-	}
+	return nil
 }
 
 func readProxies(filename string) ([]string, error) {
