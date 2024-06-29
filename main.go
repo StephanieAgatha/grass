@@ -22,6 +22,7 @@ import (
 const (
 	proxyUrlTemplate = "http://%s"
 	urlToGet         = "http://ip-api.com/json"
+	retryInterval    = 10 * time.Second // interval to wait before retrying connection
 )
 
 var (
@@ -73,7 +74,7 @@ func getProxyIP(proxy string) (string, error) {
 	return "", fmt.Errorf("query field not found in response")
 }
 
-func sendPing(c *websocket.Conn, proxyIP string, logger zerolog.Logger) {
+func sendPing(ctx context.Context, c *websocket.Conn, proxyIP string, logger zerolog.Logger) {
 	ticker := time.NewTicker(20 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -91,6 +92,8 @@ func sendPing(c *websocket.Conn, proxyIP string, logger zerolog.Logger) {
 				return
 			}
 			logger.Info().Str("ip", proxyIP).Interface("message", sendMessage).Msg("Sent ping message")
+		case <-ctx.Done():
+			return
 		}
 	}
 }
@@ -151,42 +154,53 @@ func receiveMessages(ctx context.Context, c *websocket.Conn, proxyIP, deviceID, 
 	}
 }
 
-func connectToWSS(ctx context.Context, socks5Proxy string, userID string, logger zerolog.Logger) error {
-	proxyURL := "socks5://" + socks5Proxy
+func connectToWSS(ctx context.Context, socks5Proxy string, userID string, logger zerolog.Logger) {
+	for {
+		proxyURL := "socks5://" + socks5Proxy
 
-	proxyParsed, err := url.Parse(proxyURL)
-	if err != nil {
-		return fmt.Errorf("error parsing proxy URL: %v", err)
+		proxyParsed, err := url.Parse(proxyURL)
+		if err != nil {
+			logger.Error().Err(err).Msg("Error parsing proxy URL")
+			time.Sleep(retryInterval)
+			continue
+		}
+
+		deviceID := uuid.NewSHA1(uuid.NameSpaceDNS, []byte(proxyParsed.Host)).String()
+		logger.Info().Str("deviceID", deviceID).Msg("Device ID")
+
+		proxyIP, err := getProxyIP(socks5Proxy)
+		if err != nil {
+			logger.Error().Err(err).Msg("Error getting proxy IP")
+			time.Sleep(retryInterval)
+			continue
+		}
+		logger.Info().Str("proxyIP", proxyIP).Msg("Proxy IP")
+
+		u := url.URL{Scheme: "wss", Host: "proxy.wynd.network:4650", Path: "/"}
+		logger.Info().Str("url", u.String()).Msg("Connecting to")
+
+		dialer := websocket.Dialer{
+			Proxy:            http.ProxyURL(proxyParsed),
+			TLSClientConfig:  &tls.Config{InsecureSkipVerify: true},
+			HandshakeTimeout: 30 * time.Second,
+		}
+
+		c, _, err := dialer.DialContext(ctx, u.String(), CustomHeaders)
+		if err != nil {
+			logger.Error().Err(err).Msg("Error connecting to WebSocket")
+			time.Sleep(retryInterval)
+			continue
+		}
+
+		logger.Info().Msg("Connected to WebSocket")
+
+		go sendPing(ctx, c, proxyIP, logger)
+		receiveMessages(ctx, c, proxyIP, deviceID, userID, logger)
+
+		c.Close()
+		logger.Warn().Msg("Disconnected from WebSocket, retrying...")
+		time.Sleep(retryInterval)
 	}
-
-	deviceID := uuid.NewSHA1(uuid.NameSpaceDNS, []byte(proxyParsed.Host)).String()
-	logger.Info().Str("deviceID", deviceID).Msg("Device ID")
-
-	proxyIP, err := getProxyIP(socks5Proxy)
-	if err != nil {
-		return fmt.Errorf("error getting proxy IP: %v", err)
-	}
-	logger.Info().Str("proxyIP", proxyIP).Msg("Proxy IP")
-
-	u := url.URL{Scheme: "wss", Host: "proxy.wynd.network:4650", Path: "/"}
-	logger.Info().Str("url", u.String()).Msg("Connecting to")
-
-	dialer := websocket.Dialer{
-		Proxy:            http.ProxyURL(proxyParsed),
-		TLSClientConfig:  &tls.Config{InsecureSkipVerify: true},
-		HandshakeTimeout: 30 * time.Second,
-	}
-
-	c, _, err := dialer.DialContext(ctx, u.String(), CustomHeaders)
-	if err != nil {
-		return fmt.Errorf("error connecting to WebSocket: %v", err)
-	}
-	defer c.Close()
-
-	go sendPing(c, proxyIP, logger)
-	receiveMessages(ctx, c, proxyIP, deviceID, userID, logger)
-
-	return nil
 }
 
 func readProxies(filename string) ([]string, error) {
@@ -234,10 +248,7 @@ func main() {
 		wg.Add(1)
 		go func(proxy string) {
 			defer wg.Done()
-			err := connectToWSS(ctx, proxy, userId, log.Logger)
-			if err != nil {
-				log.Error().Err(err).Msg("Error connecting to WSS")
-			}
+			connectToWSS(ctx, proxy, userId, log.Logger)
 		}(proxy)
 	}
 	wg.Wait()
